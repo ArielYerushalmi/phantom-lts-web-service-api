@@ -1,8 +1,6 @@
 ﻿using LtsWebServiceAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using System;
-using System.Net;
-using System.Net.Http;
 
 namespace LtsWebServiceAPI.Controllers
 {
@@ -11,34 +9,39 @@ namespace LtsWebServiceAPI.Controllers
     [Route("[controller]")]
     public class UserController : ControllerBase
     {
-        public IDataReciever LtsClientService;
+        private readonly IDataReciever LtsClientService;
 
         public UserController(IDataReciever dataReciever)
         {
-            LtsClientService ??= dataReciever;
+            LtsClientService = dataReciever;
         }
 
         [HttpPut("Start")]
-        public HttpResponseMessage StartClientWebSocket()
+        public IActionResult StartClientWebSocket()
         {
             Console.WriteLine("got start request");
             LtsClientService.StartSocketServer();
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return Ok();
         }
 
         [HttpPut("Stop")]
-        public HttpResponseMessage StopClientWebSocket()
+        public IActionResult StopClientWebSocket()
         {
             Console.WriteLine("stop client request");
             LtsClientService.StopServer();
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return Ok();
         }
 
         [HttpPut("Subscribe")]
-        public HttpResponseMessage Subscribe([FromBody] string[] req)
+        public IActionResult Subscribe([FromBody] string[] req)
         {
+            if (req == null)
+            {
+                return BadRequest("Expected a JSON array of parameter names to subscribe to.");
+            }
+
             LtsClientService.Subscribe(req);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return Ok();
         }
     }
 }

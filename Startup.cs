@@ -21,7 +21,10 @@ namespace LtsWebServiceAPI
         {
             services.AddControllers();
 
-            // TODO: read about dependency injection 
+            // Registered as a singleton (not scoped/transient) because LtsClientServer holds
+            // the actual live state for the session - the Fleck WebSocket server, the current
+            // client connection and the pipeline consumer all need to survive across the
+            // separate Start/Subscribe/Stop HTTP requests that drive them.
             services.AddSingleton<IDataReciever, LtsClientServer>();
 
             services.AddCors(o => o.AddPolicy("Policy", builder =>
