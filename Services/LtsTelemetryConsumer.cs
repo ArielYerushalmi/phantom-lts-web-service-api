@@ -25,6 +25,9 @@ namespace LtsWebServiceAPI.Services
 
         public void StartConsumer()
         {
+            // Dispose any previous (e.g. faulted/aborted) socket before replacing it.
+            pipelineConsumer?.Dispose();
+
             pipelineConsumer = new ClientWebSocket();
             receiveLoopCts = new CancellationTokenSource();
             try
@@ -60,8 +63,17 @@ namespace LtsWebServiceAPI.Services
                     } while (!result.EndOfMessage);
 
                     var data = Encoding.UTF8.GetString(ms.ToArray());
-                    Console.WriteLine("LtsPipeLine Socket Got Data From PipeLine: port 6666\n");
-                    DataRecievedFunc?.Invoke(JObject.Parse(data));
+
+                    // A single malformed/unexpected frame shouldn't take down the whole
+                    // receive loop (and with it, all live telemetry for the session).
+                    try
+                    {
+                        DataRecievedFunc?.Invoke(JObject.Parse(data));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Error handling pipeline frame: " + ex.Message);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -74,18 +86,17 @@ namespace LtsWebServiceAPI.Services
             }
         }
 
+        /// <summary>True when the pipeline socket is connected and open.</summary>
         public bool IsConsumerActive()
         {
-            if (pipelineConsumer == null || pipelineConsumer.State != WebSocketState.Open)
-                return true;
-            else
-                return false;
+            return pipelineConsumer != null && pipelineConsumer.State == WebSocketState.Open;
         }
 
         public void CloseConsumer()
         {
             receiveLoopCts?.Cancel();
             pipelineConsumer?.Abort();
+            pipelineConsumer?.Dispose();
         }
     }
 }
