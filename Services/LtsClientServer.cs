@@ -10,22 +10,29 @@ namespace LtsWebServiceAPI.Services
     public class LtsClientServer : IDataReciever
     {
         private readonly string uri = "ws://127.0.0.1:5555";
-        private string[] parametersToSub;
+
+        // Both fields are written from the Fleck/Kestrel callback threads (OnOpen/OnClose,
+        // HTTP request handling) and read from the pipeline consumer's receive-loop thread.
+        // They're only ever swapped as a whole (never mutated in place), so `volatile`
+        // reference assignment is enough to make writes visible across threads.
+        private volatile IWebSocketConnection clientSocket;
+        private volatile HashSet<string> subscribedParameters = new HashSet<string>();
+
         private WebSocketServer clientWebSocketServer;
-        private IWebSocketConnection clientSocket;
-        private LtsTelemetryConsumer telemetryConsumer;
+        private readonly LtsTelemetryConsumer telemetryConsumer;
 
         public LtsClientServer()
         {
-            clientWebSocketServer = new WebSocketServer(this.uri);
             telemetryConsumer = new LtsTelemetryConsumer(FilterData);
-            clientSocket = null;
         }
 
         public void StartSocketServer()
         {
             try
             {
+                // Fleck's WebSocketServer can't be reused once Dispose()'d (see StopServer),
+                // so a fresh instance is required to support Stop -> Start cycles.
+                clientWebSocketServer = new WebSocketServer(this.uri);
                 clientWebSocketServer.Start(socket => // start client web socket
                 {
                     socket.OnOpen = () =>
@@ -35,7 +42,6 @@ namespace LtsWebServiceAPI.Services
                     };
                     socket.OnClose = () =>
                     {
-                        socket.Close();
                         clientSocket = null;
                         Console.WriteLine("ltsClient Websocket is closed: port 5555");
                         telemetryConsumer.CloseConsumer();
@@ -54,8 +60,8 @@ namespace LtsWebServiceAPI.Services
 
         public void Subscribe(string[] sub)
         {
-            this.parametersToSub = sub;
-            if (telemetryConsumer.IsConsumerActive())
+            this.subscribedParameters = new HashSet<string>(sub ?? Array.Empty<string>());
+            if (!telemetryConsumer.IsConsumerActive())
             {
                 telemetryConsumer.StartConsumer(); // init pipeline consumer
                 Console.WriteLine($"Client subscribed: data recieved event is null ? {telemetryConsumer.DataRecievedFunc == null}");
@@ -64,44 +70,42 @@ namespace LtsWebServiceAPI.Services
 
         public void FilterData(JObject data)
         {
-            JArray array = (JArray)data["Parameters"];
-            IList<FrameParameter> parameter = array.ToObject<IList<FrameParameter>>();
-            var parameterFromClient = this.parametersToSub;
+            var array = data["Parameters"] as JArray;
+            if (array == null)
+            {
+                return; // frame doesn't carry a "Parameters" array - nothing to filter/send
+            }
+
+            IList<FrameParameter> parameters = array.ToObject<IList<FrameParameter>>();
+            var wanted = this.subscribedParameters;
             List<FrameParameter> listToSend = new List<FrameParameter>();
 
-            foreach (FrameParameter p in parameter)
+            foreach (FrameParameter p in parameters)
             {
-                Console.WriteLine("all data is: " + p);
-                foreach (string name in parameterFromClient)
+                if (p?.Name != null && wanted.Contains(p.Name))
                 {
-                    if (p.Name.Equals(name))
-                    {
-                        listToSend.Add(p);
-                    }
+                    listToSend.Add(p);
                 }
             }
+
             var jsonToSend = JsonConvert.SerializeObject(listToSend);
             SendData(jsonToSend);
         }
 
         public void SendData(string data)
         {
-            if (clientSocket != null)
+            var socket = clientSocket;
+            if (socket != null)
             {
-                Console.WriteLine(data);
-                this.clientSocket.Send(data);
-                Console.WriteLine("ltsClient websocket send data ===>");
-            }
-            else
-            {
-                Console.WriteLine("ltsClient websocket working but is null |||");
+                socket.Send(data);
             }
         }
 
         public void StopServer()
         {
             this.telemetryConsumer.CloseConsumer();
-            this.clientWebSocketServer.Dispose();
+            this.clientWebSocketServer?.Dispose();
+            this.clientSocket = null;
         }
     }
 }
